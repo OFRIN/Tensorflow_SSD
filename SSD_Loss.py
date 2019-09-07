@@ -1,56 +1,82 @@
+# Copyright (C) 2019 * Ltd. All rights reserved.
+# author : SangHyeon Jo <josanghyeokn@gmail.com>
+
 import tensorflow as tf
 
 from Define import *
 
-def Smooth_L1(x):
-    return tf.where(tf.less_equal(tf.abs(x), 1.0), tf.multiply(0.5, tf.pow(x, 2.0)), tf.subtract(tf.abs(x), 0.5))
+def Focal_Loss(pred_classes, gt_classes, alpha = 0.25, gamma = 2):
+    '''
+    pt = {
+        p    , if y = 1
+        1 − p, otherwise
+    }
+    FL(pt) = −(1 − pt)γ * log(pt)
+    '''
+    with tf.variable_scope('focal_loss'):
+        # focal_loss = [BATCH_SIZE, 22890, CLASSES]
+        pt = gt_classes * pred_classes + (1 - gt_classes) * (1 - pred_classes) 
+        focal_loss = -alpha * tf.pow(1. - pt, gamma) * tf.log(pt + 1e-10)
 
-def SSD_Loss(pred_offset_bboxes, pred_classes, gt_offset_bboxes, gt_classes, gt_positives, length):
-    # 1. get num
-    total_num = tf.ones([BATCH_SIZE], dtype = tf.float32) * tf.to_float(length)
+        # focal_loss = [BATCH_SIZE]
+        focal_loss = tf.reduce_sum(tf.abs(focal_loss), axis = [1, 2])
+
+    return focal_loss
+
+'''
+GIoU = IoU - (C - (A U B))/C
+Loss = 1 - GIoU
+'''
+def GIoU(bboxes_1, bboxes_2):
+    # 1. calulate intersection over union
+    area_1 = (bboxes_1[..., 2] - bboxes_1[..., 0]) * (bboxes_1[..., 3] - bboxes_1[..., 1])
+    area_2 = (bboxes_2[..., 2] - bboxes_2[..., 0]) * (bboxes_2[..., 3] - bboxes_2[..., 1])
     
-    positive_num = tf.reduce_sum(gt_positives, axis = -1)
-    negative_num = total_num - positive_num
-
-    # 2. get mask
-    positive_masks = gt_positives
-    negative_masks = 1 - gt_positives # [BATCH_SIZE, length]
-
-    top_k_negative_num = tf.cast(tf.minimum(negative_num, positive_num * 3), tf.int32)
-    background_probs = tf.where(tf.cast(negative_masks, dtype = tf.bool), tf.nn.softmax(pred_classes, axis = -1)[:, :, 0], tf.ones_like(pred_classes[:, :, 0])) # [BATCH_SIZE, length]
+    intersection_wh = tf.minimum(bboxes_1[:, :, 2:], bboxes_2[:, :, 2:]) - tf.maximum(bboxes_1[:, :, :2], bboxes_2[:, :, :2])
+    intersection_wh = tf.maximum(intersection_wh, 0)
     
-    top_k_negative_masks = []
-    for i in range(BATCH_SIZE):
-        top_values, top_indexs = tf.nn.top_k(-background_probs[i], k = top_k_negative_num[i])
-
-        cond = background_probs[i] < -top_values[-1]
-        top_k_negative_mask = negative_masks * tf.where(cond, tf.ones_like(background_probs[i]), tf.zeros_like(background_probs[i]))
-        top_k_negative_masks.append(top_k_negative_mask)
-
-    top_k_negative_masks = tf.convert_to_tensor(top_k_negative_masks, dtype = tf.float32, name = 'top_k_negative_masks')
+    intersection = intersection_wh[..., 0] * intersection_wh[..., 1]
+    union = (area_1 + area_2) - intersection
     
-    # get classification losses
-    class_loss = tf.nn.softmax_cross_entropy_with_logits(logits = pred_classes, labels = gt_classes) # return (BATCH_SIZE, length)
-    
-    positive_class_loss = positive_masks * class_loss # return (BATCH_SIZE, length) - positive = value, negative = 0
-    positive_class_loss = tf.reduce_sum(positive_class_loss, axis = -1) # return (BATCH_SIZE)
+    ious = intersection / tf.maximum(union, 1e-10)
 
-    negative_class_loss = top_k_negative_masks * class_loss # return (BATCH_SIZE, length) - positive = 0, negative = 0, top_k_negative = value
-    negative_class_loss = tf.reduce_sum(negative_class_loss, axis = -1)
+    # 2. (C - (A U B))/C
+    C_wh = tf.maximum(bboxes_1[..., 2:], bboxes_2[..., 2:]) - tf.minimum(bboxes_1[..., :2], bboxes_2[..., :2])
+    C_wh = tf.maximum(C_wh, 0.0)
+    C = C_wh[..., 0] * C_wh[..., 1]
     
-    class_loss = positive_class_loss + negative_class_loss
-    class_loss = class_loss / positive_num
-    class_loss = tf.reduce_mean(class_loss, name = 'class_loss')
-    
-    # get localization losses
-    location_loss = tf.reduce_sum(Smooth_L1(pred_offset_bboxes - gt_offset_bboxes), axis = -1)
+    giou = ious - (C - union) / tf.maximum(C, 1e-10)
+    return giou
 
-    location_loss = positive_masks * location_loss
-    location_loss = tf.reduce_sum(location_loss, axis = -1)
-
-    location_loss = location_loss / positive_num
-    location_loss = tf.reduce_mean(location_loss, name = 'location_loss')
+def SSD_Loss(pred_bboxes, pred_classes, gt_bboxes, gt_classes, alpha = 1.0):
+    # positive_mask = [BATCH_SIZE, 22890]
+    positive_mask = tf.reduce_max(gt_classes[:, :, 1:], axis = -1)
+    positive_mask = tf.cast(tf.math.equal(positive_mask, 1.), dtype = tf.float32)
     
-    # total loss
-    return class_loss + location_loss, class_loss, location_loss
+    # positive_count = [BATCH_SIZE]
+    positive_count = tf.reduce_sum(positive_mask, axis = 1)
+    positive_count = tf.clip_by_value(positive_count, 1, positive_count)
+
+    # calculate focal_loss & GIoU_loss
+    focal_loss_op = Focal_Loss(pred_classes, gt_classes)
+    
+    giou_loss_op = 1 - GIoU(pred_bboxes, gt_bboxes)
+    giou_loss_op = tf.reduce_sum(positive_mask * giou_loss_op, axis = 1)
+    
+    # divide positive_count
+    focal_loss_op = tf.reduce_mean(focal_loss_op / positive_count)
+    giou_loss_op = tf.reduce_mean(giou_loss_op / positive_count)
+    
+    loss_op = focal_loss_op + giou_loss_op
+    
+    return loss_op, focal_loss_op, giou_loss_op
+
+if __name__ == '__main__':
+    pred_bboxes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, 4])
+    pred_classes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, CLASSES])
+
+    gt_bboxes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, 4])
+    gt_classes = tf.placeholder(tf.float32, [BATCH_SIZE, 22890, CLASSES])
+
+    loss_op, focal_loss_op, giou_loss_op = SSD_Loss(pred_bboxes, pred_classes, gt_bboxes, gt_classes)
 

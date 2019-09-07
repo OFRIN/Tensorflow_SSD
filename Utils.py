@@ -1,14 +1,12 @@
+# Copyright (C) 2019 * Ltd. All rights reserved.
+# author : SangHyeon Jo <josanghyeokn@gmail.com>
+
 import glob
 import numpy as np
+
 import xml.etree.ElementTree as ET
 
-from math import log, exp
-
 from Define import *
-
-def softmax(x):
-    e_x = np.exp(x - np.max(x))
-    return e_x / e_x.sum(axis=0)
 
 def log_print(string, log_path = './log.txt'):
     print(string)
@@ -34,95 +32,95 @@ def xml_read(xml_path, find_labels = CLASS_NAMES, normalize = False):
     
     for obj in root.findall('object'):
         label = obj.find('name').text
-
-        if label in find_labels:
-            classes.append(CLASS_DIC[label])
-        else:
+        if not label in find_labels:
             continue
-
+            
         bbox = obj.find('bndbox')
         
         bbox_xmin = max(min(int(bbox.find('xmin').text.split('.')[0]), image_width - 1), 0)
         bbox_ymin = max(min(int(bbox.find('ymin').text.split('.')[0]), image_height - 1), 0)
         bbox_xmax = max(min(int(bbox.find('xmax').text.split('.')[0]), image_width - 1), 0)
         bbox_ymax = max(min(int(bbox.find('ymax').text.split('.')[0]), image_height - 1), 0)
-
+        
         if normalize:
-            bbox_xmin /= image_width
-            bbox_ymin /= image_height
-            bbox_xmax /= image_width
-            bbox_ymax /= image_height
+            bbox = np.asarray([bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax], dtype = np.float32)
+            bbox /= [image_width, image_height, image_width, image_height]
+            bbox *= [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT]
+            bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax = bbox
+
+        if (bbox_xmax - bbox_xmin) == 0 or (bbox_ymax - bbox_ymin) == 0:
+            continue
         
         bboxes.append([bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax])
+        classes.append(CLASS_DIC[label])
 
-    return image_path, bboxes, classes
+    return image_path, np.asarray(bboxes, dtype = np.float32), np.asarray(classes, dtype = np.int32)
 
-def one_hot(label, classes):
-    vector = np.zeros(classes, dtype = np.float32)
-    vector[label] = 1.
-    return vector
+def compute_bboxes_IoU(bboxes_1, bboxes_2):
+    area_1 = (bboxes_1[:, 2] - bboxes_1[:, 0] + 1) * (bboxes_1[:, 3] - bboxes_1[:, 1] + 1)
+    area_2 = (bboxes_2[:, 2] - bboxes_2[:, 0] + 1) * (bboxes_2[:, 3] - bboxes_2[:, 1] + 1)
 
-def get_offset_bbox(gt_bbox, anchor_bbox, prior_scaling = [0.1, 0.1, 0.2, 0.2]):
-    offset_cx = (gt_bbox[0] - anchor_bbox[0]) / anchor_bbox[2] / prior_scaling[0]
-    offset_cy = (gt_bbox[1] - anchor_bbox[1]) / anchor_bbox[3] / prior_scaling[1]
-    offset_width = log(gt_bbox[2] / anchor_bbox[2]) / prior_scaling[2]
-    offset_height = log(gt_bbox[3] / anchor_bbox[3]) / prior_scaling[3]
+    iw = np.minimum(bboxes_1[:, 2][:, np.newaxis], bboxes_2[:, 2]) - np.maximum(bboxes_1[:, 0][:, np.newaxis], bboxes_2[:, 0]) + 1
+    ih = np.minimum(bboxes_1[:, 3][:, np.newaxis], bboxes_2[:, 3]) - np.maximum(bboxes_1[:, 1][:, np.newaxis], bboxes_2[:, 1]) + 1
 
-    return np.asarray([offset_cx, offset_cy, offset_width, offset_height], dtype = np.float32)
+    iw = np.maximum(iw, 0)
+    ih = np.maximum(ih, 0)
+    
+    intersection = iw * ih
+    union = (area_1[:, np.newaxis] + area_2) - iw * ih
 
-def get_decode_bbox(offset_bbox, anchor_bbox, prior_scaling = [0.1, 0.1, 0.2, 0.2]):
-    cx = (offset_bbox[0] * anchor_bbox[2] * prior_scaling[0]) + anchor_bbox[0]
-    cy = (offset_bbox[1] * anchor_bbox[3] * prior_scaling[1]) + anchor_bbox[1]
-    width = exp(offset_bbox[2] * prior_scaling[2]) * anchor_bbox[2]
-    height = exp(offset_bbox[3] * prior_scaling[3]) * anchor_bbox[3]
+    return intersection / np.maximum(union, 1e-10)
 
-    return np.asarray([cx, cy, width, height])
+def IoU(box1, box2):
+    box1_area = (box1[2] - box1[0] + 1) * (box1[3] - box1[1] + 1)
+    box2_area = (box2[2] - box2[0] + 1) * (box2[3] - box2[1] + 1)
+    
+    area_xmin = np.maximum(box1[0], box2[0])
+    area_ymin = np.maximum(box1[1], box2[1])
+    area_xmax = np.minimum(box1[2], box2[2])
+    area_ymax = np.minimum(box1[3], box2[3])
 
-def ccwh_to_xyxy(bbox):
-    cx, cy, w, h = bbox
+    area_w = np.maximum(0, area_xmax - area_xmin + 1)
+    area_h = np.maximum(0, area_ymax - area_ymin + 1)
 
-    xmin = max(cx - w / 2, 0)
-    ymin = max(cy - h / 2, 0)
-    xmax = cx + w / 2
-    ymax = cy + h / 2 
+    intersection = area_w * area_h
+    union = np.maximum(box1_area + box2_area - intersection, 1)
 
-    return np.asarray([xmin, ymin, xmax, ymax])
+    return intersection / union
 
-def xyxy_to_ccwh(bbox):
-    xmin, ymin, xmax, ymax = bbox
+def py_nms(dets, thresh, mode = "Union"):
+    x1 = dets[:, 0]
+    y1 = dets[:, 1]
+    x2 = dets[:, 2]
+    y2 = dets[:, 3]
+    scores = np.arange(len(dets))
 
-    cx = float((xmax + xmin) / 2)
-    cy = float((ymax + ymin) / 2)
-    width = xmax - xmin
-    height = ymax - ymin
+    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+    order = scores.argsort()[::-1]
 
-    return np.asarray([cx, cy, width, height])
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
 
-def IOU(box1, box2, option = 'center'):
+        w = np.maximum(0.0, xx2 - xx1 + 1)
+        h = np.maximum(0.0, yy2 - yy1 + 1)
+        inter = w * h
+        if mode == "Union":
+            ovr = inter / (areas[i] + areas[order[1:]] - inter)
+        elif mode == "Minimum":
+            ovr = inter / np.minimum(areas[i], areas[order[1:]])
 
-    if option == 'center':
-        box1 = ccwh_to_xyxy(box1) * IMAGE_HEIGHT
-        box2 = ccwh_to_xyxy(box2) * IMAGE_HEIGHT
+        #keep
+        inds = np.where(ovr <= thresh)[0]
+        order = order[inds + 1]
 
-        assert IMAGE_WIDTH == IMAGE_HEIGHT
-
-    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
-    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
-
-    xx1 = np.maximum(box1[0], box2[0])
-    yy1 = np.maximum(box1[1], box2[1])
-    xx2 = np.minimum(box1[2], box2[2])
-    yy2 = np.minimum(box1[3], box2[3])
-
-    w = np.maximum(0, xx2 - xx1)
-    h = np.maximum(0, yy2 - yy1)
-
-    inter = w * h
-    if (box1_area + box2_area - inter) <= 0:
-        return 0.0
-
-    ovr = inter * 1.0 / (box1_area + box2_area - inter)
-    return ovr
+    return keep
 
 def class_nms(bboxes, classes, threshold = 0.5, mode = 'Union'):
     data_dic = {}
@@ -138,46 +136,13 @@ def class_nms(bboxes, classes, threshold = 0.5, mode = 'Union'):
 
     for key in data_dic.keys():
         data_dic[key] = np.asarray(data_dic[key], dtype = np.float32)
-
         keep_indexs = py_nms(data_dic[key], threshold)
 
         for bbox in data_dic[key][keep_indexs]:
             nms_bboxes.append(bbox)
             nms_classes.append(key)
-
+    
     return nms_bboxes, nms_classes
-
-def py_nms(dets, thresh, mode="Union"):
-    x1 = dets[:, 0]
-    y1 = dets[:, 1]
-    x2 = dets[:, 2]
-    y2 = dets[:, 3]
-    scores = dets[:, 4]
-
-    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
-    order = scores.argsort()[::-1]
-
-    keep = []
-    while order.size > 0:
-        i = order[0]
-        keep.append(i)
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-
-        w = np.maximum(0.0, xx2 - xx1 + 1)
-        h = np.maximum(0.0, yy2 - yy1 + 1)
-        inter = w * h
-        if mode == "Union":
-            ovr = inter / (areas[i] + areas[order[1:]] - inter)
-        elif mode == "Minimum":
-            ovr = inter / np.minimum(areas[i], areas[order[1:]])
-        #keep
-        inds = np.where(ovr <= thresh)[0]
-        order = order[inds + 1]
-
-    return keep
 
 def Precision_Recall(gt_boxes, gt_classes, pred_boxes, pred_classes, threshold_iou = 0.5):
     recall = 0.0
@@ -195,14 +160,15 @@ def Precision_Recall(gt_boxes, gt_classes, pred_boxes, pred_classes, threshold_i
 
         recall_vector = np.zeros(gt_boxes_cnt)
         precision_vector = np.zeros(pred_boxes_cnt)
-        
+
         for gt_index in range(gt_boxes_cnt):
             for pred_index in range(pred_boxes_cnt):
-                if IOU(pred_boxes[pred_index], gt_boxes[gt_index], 'xyxy') >= threshold_iou:
+                if IoU(pred_boxes[pred_index], gt_boxes[gt_index]) >= threshold_iou:
                     recall_vector[gt_index] = True
                     if gt_classes[gt_index] == pred_classes[pred_index]:
                         precision_vector[pred_index] = True
 
         recall = np.sum(recall_vector) / gt_boxes_cnt
         precision = np.sum(precision_vector) / pred_boxes_cnt
+
     return precision, recall

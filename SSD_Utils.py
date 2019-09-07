@@ -1,148 +1,201 @@
+# Copyright (C) 2019 * Ltd. All rights reserved.
+# author : SangHyeon Jo <josanghyeokn@gmail.com>
+
 import numpy as np
 import tensorflow as tf
 
-from Utils import *
 from Define import *
+from Utils import *
+from DataAugmentation import *
 
-def Generate_Anchors(layer_shapes, layer_aspect_ratios, min_max_scales):
-    min_scale, max_scale = min_max_scales
-    anchor_scales = np.linspace(min_scale, max_scale, num = len(layer_shapes))
+def get_data(xml_path, training, normalize = True):
+    if training:
+        image_path, gt_bboxes, gt_classes = xml_read(xml_path, normalize = False)
 
-    default_anchor_bboxes = []
-    for index, anchor_scale, layer_shape, aspect_ratios in zip(range(len(SSD_LAYER_SHAPES)), anchor_scales, layer_shapes, layer_aspect_ratios):
-        height, width = layer_shape
+        image = cv2.imread(image_path)
 
-        for y in range(height):
-            for x in range(width):
-                for aspect_ratio in aspect_ratios:
-                    # center x, y
-                    anchor_cx = (x + 0.5) / width
-                    anchor_cy = (y + 0.5) / height
-
-                    # width, height
-                    if aspect_ratio == -1:
-                        anchor_width = np.sqrt(anchor_scale * anchor_scales[index + 1])
-                        anchor_height = np.sqrt(anchor_scale * anchor_scales[index + 1])
-                    else:
-                        anchor_width = anchor_scale * np.sqrt(aspect_ratio)
-                        anchor_height = anchor_scale / np.sqrt(aspect_ratio)
-                        
-                    default_anchor_bboxes.append([anchor_cx, anchor_cy, anchor_width, anchor_height])
-
-    return np.asarray(default_anchor_bboxes, dtype = np.float32)
-
-class SSD_EDCoder:
-    def __init__(self, layer_shapes, aspect_ratios, min_max_scales, positive_iou_threshold):
-        self.length = 0
-        self.positive_iou_threshold = positive_iou_threshold
-        self.default_anchor_bboxes = Generate_Anchors(layer_shapes, aspect_ratios, min_max_scales)
-
-        for layer_shape, aspect_ratio in zip(layer_shapes, SSD_ASPECT_RATIOS):
-            height, width = layer_shape
-            self.length += (height * width * len(aspect_ratio))
-
-        self.default_gt_classes = np.zeros((BATCH_SIZE, self.length, CLASSES))
-        self.default_gt_classes[..., 0] = 1.
-
-        print('[i] SSD_EDCoder')
-        print('[i] length : {}, {}'.format(self.length, len(self.default_anchor_bboxes)))
-        print('[i] positive_iou_threshold : {}'.format(self.positive_iou_threshold))
-        print()
-
-    def Encode(self, batch_data_list):
-        gt_classes = self.default_gt_classes.copy()
-        gt_offset_bboxes = np.zeros((BATCH_SIZE, self.length, 4))
-        gt_positives = np.zeros((BATCH_SIZE, self.length))
+        image, gt_bboxes, gt_classes = DataAugmentation(image, gt_bboxes, gt_classes)
+        image_h, image_w, image_c = image.shape
         
-        for batch_index, data_list in enumerate(batch_data_list):
-            for data in data_list:
-                gt_bbox, class_index = data
-                bbox = xyxy_to_ccwh(gt_bbox)
-                
-                object_positive = False
+        image = cv2.resize(image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation = cv2.INTER_CUBIC)
 
-                best_iou = -1
-                best_anchor_index = 0
-                best_gt_class = []
-                best_gt_offset_bbox = []
+        gt_bboxes = gt_bboxes.astype(np.float32)
+        gt_classes = np.asarray(gt_classes, dtype = np.int32)
 
-                for anchor_index, anchor_bbox in enumerate(self.default_anchor_bboxes):
-                    iou = IOU(bbox, anchor_bbox, 'center')
-                    gt_class = one_hot(class_index, CLASSES)
-                    gt_offset_bbox = get_offset_bbox(bbox, anchor_bbox)
-                    
-                    if iou > best_iou:
-                        best_iou = iou
-                        best_anchor_index = anchor_index
+        if normalize:
+            gt_bboxes /= [image_w, image_h, image_w, image_h]
+            gt_bboxes *= [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT]
 
-                        best_gt_class = gt_class
-                        best_gt_offset_bbox = gt_offset_bbox
-                    
-                    if iou >= self.positive_iou_threshold:
-                        object_positive = True
-                        
-                        gt_classes[batch_index][anchor_index] = gt_class
-                        gt_offset_bboxes[batch_index][anchor_index] = gt_offset_bbox
-                        gt_positives[batch_index][anchor_index] = 1
+        # print(image.shape)
+        # print(np.min(gt_bboxes), np.max(gt_bboxes), image.shape)
 
-                if not object_positive:
-                    gt_classes[batch_index][best_anchor_index] = best_gt_class
-                    gt_offset_bboxes[batch_index][best_anchor_index] = best_gt_offset_bbox
-                    gt_positives[batch_index][best_anchor_index] = 1
+        # for bbox in gt_bboxes:
+        #     print(bbox)
+        #     xmin, ymin, xmax, ymax = (bbox * [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT]).astype(np.int32)
+        #     cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
-        return gt_classes, gt_offset_bboxes, gt_positives
+        # cv2.imshow('show', image)
+        # cv2.waitKey(0)
+    else:
+        image_path, gt_bboxes, gt_classes = xml_read(xml_path, normalize = normalize)
+        image = cv2.imread(image_path)
 
-    def Decode(self, pred_classes, pred_offset_bboxes, size = (IMAGE_WIDTH, IMAGE_HEIGHT), threshold = 0.5):
-        bboxes = []
-        classes = []
+    return image, gt_bboxes, gt_classes
 
-        image_width, image_height = size
-        for anchor_index, anchor_bbox in enumerate(self.default_anchor_bboxes):
-            pred_class_index = np.argmax(pred_classes[anchor_index])
-            pred_class_prob = softmax(pred_classes[anchor_index])
-            #pred_class_prob = pred_classes[anchor_index]
+def generate_anchors(ssd_sizes, image_wh, anchor_scales, anchor_ratios):
+    ssd_sizes = np.asarray(ssd_sizes, dtype = np.int32)
+    image_wh = np.asarray(image_wh, dtype = np.float32)
 
-            if pred_class_index != 0 and pred_class_prob[pred_class_index] >= threshold:
-                bbox = get_decode_bbox(pred_offset_bboxes[anchor_index], anchor_bbox)
-                xmin, ymin, xmax, ymax = ccwh_to_xyxy(bbox) * [image_width, image_height, image_width, image_height]
+    anchors = []
+    for size in ssd_sizes:
+        # scales * ratios
+        strides = image_wh / size
+        base_anchor_wh = strides * 2
+        base_anchor_whs = [base_anchor_wh * scale for scale in anchor_scales]
 
-                xmin = max(min(xmin, image_width - 1), 0)
-                ymin = max(min(ymin, image_height - 1), 0)
-                xmax = max(min(xmax, image_width - 1), 0)
-                ymax = max(min(ymax, image_height - 1), 0)
+        '''
+        [41 41] [15.65853659 15.65853659]
+        [21 21] [30.57142857 30.57142857]
+        [11 11] [58.36363636 58.36363636]
+        [6 6] [107. 107.]
+        [3 3] [214. 214.]
+        [1 1] [642. 642.]
+        '''
+        # print(size, base_anchor_wh)
 
-                bboxes.append(np.append([xmin, ymin, xmax, ymax], pred_class_prob[pred_class_index]))
-                classes.append(pred_class_index)
+        anchor_wh_list = []
+        for base_anchor_wh in base_anchor_whs:
+            for anchor_ratio in anchor_ratios:
+                w = base_anchor_wh[0] * np.sqrt(anchor_ratio)
+                h = base_anchor_wh[1] / np.sqrt(anchor_ratio)
+                anchor_wh_list.append([w, h])
 
-        return bboxes, classes
+        # append anchors 
+        for y in range(size[1]):
+            for x in range(size[0]):
+                anchor_cx = (x + 0.5) * strides[0]
+                anchor_cy = (y + 0.5) * strides[1]
+
+                for anchor_wh in anchor_wh_list:
+                    anchors.append([anchor_cx, anchor_cy] + anchor_wh)
+
+    anchors = np.asarray(anchors, dtype = np.float32)
+
+    cx, cy, w, h = anchors[:, 0], anchors[:, 1], anchors[:, 2], anchors[:, 3]
+
+    cond = np.logical_and(cx < IMAGE_WIDTH, cy < IMAGE_HEIGHT)
+    cx, cy, w, h = cx[cond], cy[cond], w[cond], h[cond]
+
+    xmin, ymin, xmax, ymax = cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2
+
+    xmin = np.maximum(np.minimum(xmin, image_wh[0] - 1), 0.)
+    ymin = np.maximum(np.minimum(ymin, image_wh[1] - 1), 0.)
+    xmax = np.maximum(np.minimum(xmax, image_wh[0] - 1), 0.)
+    ymax = np.maximum(np.minimum(ymax, image_wh[1] - 1), 0.)
+    
+    anchors = np.stack([xmin, ymin, xmax, ymax]).T
+    return anchors
+
+def Encode(gt_bboxes, gt_classes, anchors):
+    encode_bboxes = np.zeros_like(anchors)
+    encode_classes = np.zeros((anchors.shape[0], CLASSES), dtype = np.float32)
+    encode_classes[:, 0] = 1.
+
+    if len(gt_bboxes) != 0:
+        # calculate ious
+        ious = compute_bboxes_IoU(anchors, gt_bboxes)
+        max_iou_indexs = np.argmax(ious, axis = 1)
+        max_ious = ious[np.arange(anchors.shape[0]), max_iou_indexs]
+        
+        # get positive indexs
+        positive_indexs = max_ious >= POSITIVE_IOU_THRESHOLD
+
+        # set encode_classes
+        positive_classes = gt_classes[max_iou_indexs][positive_indexs]
+        encode_classes[positive_indexs, 0] = 0.
+        encode_classes[positive_indexs, positive_classes] = 1.
+        
+        # set encode_bboxes
+        encode_bboxes = gt_bboxes[max_iou_indexs]
+    
+    return encode_bboxes, encode_classes
+
+def Decode(encode_bboxes, encode_classes, anchors, image_wh):
+    w, h = image_wh
+
+    pred_bboxes = []
+    pred_classes = []
+
+    for bbox, class_prob in zip(encode_bboxes, encode_classes):
+        class_index = np.argmax(class_prob)
+        if class_index != 0:
+            xmin, ymin, xmax, ymax = bbox / np.asarray([IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT]) * np.asarray([w, h, w, h])
+            
+            pred_bboxes.append([xmin, ymin, xmax, ymax])
+            pred_classes.append(class_index)
+
+    return np.asarray(pred_bboxes, dtype = np.float32), np.asarray(pred_classes, dtype = np.int32)
 
 if __name__ == '__main__':
     import cv2
+    from SSD import *
 
-    ssd_edcoder = SSD_EDCoder(SSD_LAYER_SHAPES, SSD_ASPECT_RATIOS, [MIN_SCALE, MAX_SCALE], POSITIVE_IOU_THRESHOLD)
+    input_var = tf.placeholder(tf.float32, [None, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
+    ssd_dic, ssd_sizes = SSD(input_var, False)
 
-    batch_data_list = []
-    bboxes = [[0.1, 0.1, 0.2, 0.2], [0.0, 0.0, 0.8, 0.8]]
-    classes = [1, 2]
+    anchors = generate_anchors(ssd_sizes, [IMAGE_WIDTH, IMAGE_HEIGHT], ANCHOR_SCALES, ANCHOR_RATIOS)
 
-    data = []
-    for bbox, class_index in zip(bboxes, classes):
-        data.append([bbox, class_index])
+    # 1. Demo Anchors
+    # bg = np.zeros((IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL), dtype = np.uint8)
+    
+    # for index, anchor in enumerate(anchors):
+    #     xmin, ymin, xmax, ymax = anchor.astype(np.int32)
+        
+    #     cv2.circle(bg, ((xmax + xmin) // 2, (ymax + ymin) // 2), 1, (0, 0, 255), 2)
+    #     cv2.rectangle(bg, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
-    batch_data_list.append(data)
+    #     if (index + 1) % (len(ANCHOR_RATIOS) * len(ANCHOR_SCALES)) == 0:
+    #         cv2.imshow('show', bg)
+    #         cv2.waitKey(1)
 
-    gt_classes, gt_offset_bboxes, gt_positives = ssd_edcoder.Encode(batch_data_list)
-    print(np.sum(gt_positives[0]))
-    print(np.sum(1 - gt_positives[0]))
+    #         bg = np.zeros((IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL), dtype = np.uint8)
 
-    test_image = np.zeros((360, 640, 3), dtype = np.uint8)
-    pred_bboxes, pred_classes = ssd_edcoder.Decode(gt_classes[0], gt_offset_bboxes[0], size = (640, 360))
+    # 2. Demo GT bboxes (Encode -> Decode)
+    xml_paths = glob.glob('D:/DB/VOC2007/train/xml/*.xml')
+    
+    for xml_path in xml_paths:
+        image_path, gt_bboxes, gt_classes = xml_read(xml_path, normalize = True)
+        print(gt_bboxes, np.min(gt_bboxes), np.max(gt_bboxes), len(gt_bboxes))
+        
+        image = cv2.imread(image_path)
+        h, w, c = image.shape
+        
+        encode_bboxes, encode_classes = Encode(gt_bboxes, gt_classes, anchors)
+        positive_count = np.sum(encode_classes[:, 1:])
+        
+        positive_mask = np.max(encode_classes[:, 1:], axis = 1)
+        positive_mask = positive_mask[:, np.newaxis]
+        print(np.min(positive_mask), np.max(positive_mask))
+        
+        # (22890, 4) (22890, 21)
+        print(np.min(positive_mask * encode_bboxes[:, :2]), np.max(positive_mask * encode_bboxes[:, :2]), \
+              np.min(positive_mask * encode_bboxes[:, 2:]), np.max(positive_mask * encode_bboxes[:, 2:]))
+        print(encode_bboxes.shape, encode_classes.shape, positive_count)
 
-    print(len(pred_bboxes))
-    for bbox, class_index in zip(pred_bboxes, pred_classes):
-        xmin, ymin, xmax, ymax, conf = bbox
-        xmin, ymin, xmax, ymax = [int(v) for v in [xmin, ymin, xmax, ymax]]
-        cv2.rectangle(test_image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 1)
+        pred_bboxes, pred_classes = Decode(encode_bboxes, encode_classes, anchors, [w, h])
+        
+        positive_mask = np.max(encode_classes[:, 1:], axis = 1)
+        for i, mask in enumerate(positive_mask):
+            if mask == 1:
+                xmin, ymin, xmax, ymax = (anchors[i] / [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT] * [w, h, w, h]).astype(np.int32)
+                cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 0, 255), 1)
+        
+        for pred_bbox, pred_class in zip(pred_bboxes, pred_classes):
+            xmin, ymin, xmax, ymax = pred_bbox.astype(np.int32)
 
-    cv2.imshow('show', test_image)
-    cv2.waitKey(0)
+            cv2.putText(image, '{}'.format(pred_class), (xmin, ymin - 10), 1, 1, (0, 255, 0), 1)
+            cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 1)
+
+        cv2.imshow('show', image)
+        cv2.waitKey(0)
+

@@ -1,15 +1,21 @@
+# Copyright (C) 2019 * Ltd. All rights reserved.
+# author : SangHyeon Jo <josanghyeokn@gmail.com>
 
 import numpy as np
 import tensorflow as tf
 
-import VGG16 as vgg
+import resnet_v2.resnet_v2 as resnet_v2
+
 from Define import *
 
 initializer = tf.contrib.layers.xavier_initializer()
 
-def conv_bn_relu(x, filters, kernel_size, strides, padding, is_training, scope, bn = True, activation = True):
+def conv_bn_relu(x, filters, kernel_size, strides, padding, is_training, scope, bn = True, activation = True, use_bias = True, upscaling = False):
     with tf.variable_scope(scope):
-        x = tf.layers.conv2d(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = initializer, name = 'conv2d')
+        if not upscaling:
+            x = tf.layers.conv2d(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = initializer, use_bias = use_bias, name = 'conv2d')
+        else:
+            x = tf.layers.conv2d_transpose(inputs = x, filters = filters, kernel_size = kernel_size, strides = strides, padding = padding, kernel_initializer = initializer, use_bias = use_bias, name = 'upconv2d')
         
         if bn:
             x = tf.layers.batch_normalization(inputs = x, training = is_training, name = 'bn')
@@ -18,69 +24,117 @@ def conv_bn_relu(x, filters, kernel_size, strides, padding, is_training, scope, 
             x = tf.nn.relu(x, name = 'relu')
     return x
 
-VGG_MEAN = [103.94, 116.78, 123.68]
-def SSD_VGG(x, is_training):
-    x -= VGG_MEAN
-    feature_maps_list = []
+def SSD_Decode_Layer(offset_bboxes, anchors):
+    with tf.variable_scope('SSD_Decode'):
+        # 1. offset_bboxes
+        tx = offset_bboxes[..., 0]
+        ty = offset_bboxes[..., 1]
+        tw = offset_bboxes[..., 2]
+        th = offset_bboxes[..., 3]
+        
+        # 2. anchors
+        wa = anchors[..., 2] - anchors[..., 0]
+        ha = anchors[..., 3] - anchors[..., 1]
+        xa = anchors[..., 0] + wa / 2
+        ya = anchors[..., 1] + ha / 2
+
+        # 3. pred_bboxes (cxcywh)
+        x = tx * wa + xa
+        y = ty * ha + ya
+        w = tf.exp(tw) * wa
+        h = tf.exp(th) * ha
+        
+        # 4. pred_bboxes (cxcywh -> xyxy)
+        xmin = x - w / 2
+        ymin = y - h / 2
+        xmax = x + w / 2
+        ymax = y + h / 2
+
+        # 5. exception (0 ~ IMAGE_WIDTH , IMAGE_HEIGHT)
+        xmin = tf.clip_by_value(xmin[..., tf.newaxis], 0, IMAGE_WIDTH - 1)
+        ymin = tf.clip_by_value(ymin[..., tf.newaxis], 0, IMAGE_HEIGHT - 1)
+        xmax = tf.clip_by_value(xmax[..., tf.newaxis], 0, IMAGE_WIDTH - 1)
+        ymax = tf.clip_by_value(ymax[..., tf.newaxis], 0, IMAGE_HEIGHT - 1)
+        
+        pred_bboxes = tf.concat([xmin, ymin, xmax, ymax], axis = -1)
+
+    return pred_bboxes
+
+def SSD_ResNet_50(input_var, is_training):
+    ssd_dic = {}
+    ssd_sizes = []
+
+    x = input_var - [103.939, 123.68, 116.779]
     
-    with tf.contrib.slim.arg_scope(vgg.vgg_arg_scope()):
-        conv4_3, conv5_3 = vgg.vgg_16(x, num_classes=1000, is_training=is_training, dropout_keep_prob=0.5)
+    with tf.contrib.slim.arg_scope(resnet_v2.resnet_arg_scope()):
+        logits, end_points = resnet_v2.resnet_v2_50(x, is_training = is_training)
 
-    conv4_3 = tf.nn.l2_normalize(conv4_3, axis = -1)
-    conv4_3 = conv4_3 * tf.Variable(initial_value = tf.constant(20.), name = 'norm_factor')
-    print(conv4_3); feature_maps_list.append(conv4_3)
-
+    feature_maps = [end_points['resnet_v2_50/block{}'.format(i)] for i in [1, 2, 4]]
+    
     with tf.variable_scope('SSD'):
-        conv6 = conv_bn_relu(conv5_3, 1024, (3, 3), 1, 'same', is_training, 'conv6')
-        conv7 = conv_bn_relu(conv6, 1024, (1, 1), 1, 'same', is_training, 'conv7')
-        print(conv7); feature_maps_list.append(conv7)
+        x = feature_maps[2]
 
-        conv8_1 = conv_bn_relu(conv7, 256, (1, 1), 1, 'same', is_training, 'conv8_1')
-        conv8_2 = conv_bn_relu(conv8_1, 512, (3, 3), 2, 'same', is_training, 'conv8_2')
-        print(conv8_2); feature_maps_list.append(conv8_2)
+        x = conv_bn_relu(x, 128, (1, 1), 1, 'valid', is_training, 'conv1_1x1')
+        x = conv_bn_relu(x, 256, (3, 3), 2, 'same', is_training, 'conv1_3x3')
+        feature_maps.append(x)
         
-        conv9_1 = conv_bn_relu(conv8_2, 128, (1, 1), 1, 'same', is_training, 'conv9_1')
-        conv9_2 = conv_bn_relu(conv9_1, 256, (3, 3), 2, 'same', is_training, 'conv9_2')
-        print(conv9_2); feature_maps_list.append(conv9_2)
+        x = conv_bn_relu(x, 128, (1, 1), 1, 'valid', is_training, 'conv2_1x1')
+        x = conv_bn_relu(x, 256, (3, 3), 2, 'same', is_training, 'conv2_3x3')
+        feature_maps.append(x)
 
-        conv10_1 = conv_bn_relu(conv9_2, 128, (1, 1), 1, 'same', is_training, 'conv10_1')
-        conv10_2 = conv_bn_relu(conv10_1, 256, (3, 3), 2, 'same', is_training, 'conv10_2')
-        print(conv10_2); feature_maps_list.append(conv10_2)
-
-        conv11_1 = conv_bn_relu(conv10_2, 128, (1, 1), 1, 'same', is_training, 'conv11_1')
-        conv11_2 = conv_bn_relu(conv11_1, 256, (3, 3), 1, 'valid', is_training, 'conv11_2')
-        print(conv11_2); feature_maps_list.append(conv11_2)
-
-    # SSD_Classifiers
-    with tf.variable_scope('SSD_Classifiers'):
+        x = conv_bn_relu(x, 128, (1, 1), 1, 'valid', is_training, 'conv3_1x1')
+        x = conv_bn_relu(x, 256, (3, 3), 1, 'valid', is_training, 'conv3_3x3')
+        feature_maps.append(x)
         
-        pred_bboxes_list = []
-        pred_classes_list = []
+        '''
+        Tensor("resnet_v2_50/block1/unit_3/bottleneck_v2/add:0", shape=(?, 41, 41, 256), dtype=float32)
+        Tensor("resnet_v2_50/block2/unit_4/bottleneck_v2/add:0", shape=(?, 21, 21, 512), dtype=float32)
+        Tensor("resnet_v2_50/block4/unit_3/bottleneck_v2/add:0", shape=(?, 11, 11, 2048), dtype=float32)
+        Tensor("SSD/conv1_3x3/relu:0", shape=(?, 6, 6, 128), dtype=float32)
+        Tensor("SSD/conv2_3x3/relu:0", shape=(?, 3, 3, 128), dtype=float32)
+        Tensor("SSD/conv3_3x3/relu:0", shape=(?, 1, 1, 128), dtype=float32)
+        Tensor("SSD/bboxes:0", shape=(?, 13734, 4), dtype=float32)
+        Tensor("SSD/Softmax:0", shape=(?, 13734, 21), dtype=float32)
+        '''
+        # for feature_map in feature_maps:
+        #    print(feature_map)
 
-        for index, feature_maps in enumerate(feature_maps_list):
-            print('# ', feature_maps)
-            feature_h, feature_w, feature_c = feature_maps.shape[1:]
-            bbox_count = len(SSD_ASPECT_RATIOS[index])
+        pred_bboxes = []
+        pred_classes = []
 
-            # bboxes
-            pred_bboxes = conv_bn_relu(feature_maps, 4 * bbox_count, (1, 1), 1, 'same', is_training, 'BoundingBoxes_{}'.format(index), True, False)
-            pred_bboxes = tf.reshape(pred_bboxes, [-1, feature_w * feature_h * bbox_count, 4], name = 'BoundingBoxes_{}_Reshape'.format(index))
-
-            # class
-            pred_classes = conv_bn_relu(feature_maps, CLASSES * bbox_count, (1, 1), 1, 'same', is_training, 'Classes_{}'.format(index), True, False)
-            pred_classes = tf.reshape(pred_classes, [-1, feature_w * feature_h * bbox_count, CLASSES], name = 'Classes_{}_Reshape'.format(index))
-
-            pred_bboxes_list.append(pred_bboxes)
-            pred_classes_list.append(pred_classes)
-
-        pred_bboxes_op = tf.concat(pred_bboxes_list, axis = 1, name = 'offset_bboxes')
-        pred_classes_op = tf.concat(pred_classes_list, axis = 1, name = 'classes')
+        anchors_per_location = len(ANCHOR_SCALES) * len(ANCHOR_RATIOS)
         
-    return pred_bboxes_op, pred_classes_op
+        for feature_map in feature_maps:
+            _, h, w, c = feature_map.shape.as_list()
+            ssd_sizes.append([w, h])
+            
+            _pred_bboxes = conv_bn_relu(feature_map, 256, (3, 3), 1, 'same', is_training, 'bboxes_{}x{}_1'.format(w, h), bn = True, activation = True)
+            _pred_bboxes = conv_bn_relu(_pred_bboxes, 256, (3, 3), 1, 'same', is_training, 'bboxes_{}x{}_2'.format(w, h), bn = True, activation = True)
+            _pred_bboxes = conv_bn_relu(_pred_bboxes, 4 * anchors_per_location, (3, 3), 1, 'same', is_training, 'bboxes_{}x{}'.format(w, h), bn = False, activation = False)
+            _pred_bboxes = tf.reshape(_pred_bboxes, [-1, h * w * anchors_per_location, 4])
+            
+            _pred_classes = conv_bn_relu(feature_map, 256, (3, 3), 1, 'same', is_training, 'classes_{}x{}_1'.format(w, h), bn = True, activation = True)
+            _pred_classes = conv_bn_relu(_pred_classes, 256, (3, 3), 1, 'same', is_training, 'classes_{}x{}_2'.format(w, h), bn = True, activation = True)
+            _pred_classes = conv_bn_relu(_pred_classes, CLASSES * anchors_per_location, (3, 3), 1, 'same', is_training, 'classes_{}x{}'.format(w, h), bn = False, activation = False)
+            _pred_classes = tf.reshape(_pred_classes, [-1, h * w* anchors_per_location, CLASSES])
+
+            pred_bboxes.append(_pred_bboxes)
+            pred_classes.append(_pred_classes)
+
+        pred_bboxes = tf.concat(pred_bboxes, axis = 1, name = 'bboxes')
+        pred_classes = tf.concat(pred_classes, axis = 1, name = 'classes')
+
+        ssd_dic['pred_bboxes'] = pred_bboxes
+        ssd_dic['pred_classes'] = tf.nn.softmax(pred_classes, axis = -1)
+
+    return ssd_dic, ssd_sizes
+
+SSD = SSD_ResNet_50
 
 if __name__ == '__main__':
-    input_var = tf.placeholder(tf.float32, [None, 300, 300, 3])
+    input_var = tf.placeholder(tf.float32, [None, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
+
+    ssd_dic, ssd_sizes = SSD(input_var, False)
     
-    pred_bboxes_op, pred_classes_op = SSD_VGG(input_var, False)
-    print(pred_bboxes_op, pred_classes_op)
-    
+    print(ssd_dic['pred_bboxes'])
+    print(ssd_dic['pred_classes'])
