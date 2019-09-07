@@ -21,7 +21,6 @@
 ![res](./res/Test_4.PNG)
 
 ## # Tensorboard
-### 1. LSEP Loss
 ![res](./res/Train_Focal_Loss.PNG)
 ![res](./res/Train_GIoU_Loss.PNG)
 ![res](./res/Train_L2_Regularization_Loss.PNG)
