@@ -12,7 +12,8 @@
 | (paper) YOLOv1-VGG16 | 66.4% |
 | (paper) SSD300-VGG16 | 74.3% |
 | (self) YOLOv1+ | 78.47% |
-| (self) SSD321-ResNetv2-50 | 78.65% |
+| (self) SSD321-ResNetv2-50, Smooth L1 | 76.89% |
+| (self) SSD321-ResNetv2-50, GIoU | 78.65% |
 
 ## # Test Samples (Green - Prediction, Red - Ground Truth)
 ![res](./res/Test_1.PNG)
