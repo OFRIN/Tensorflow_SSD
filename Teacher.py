@@ -1,5 +1,3 @@
-# Copyright (C) 2019 * Ltd. All rights reserved.
-# author : SangHyeon Jo <josanghyeokn@gmail.com>
 
 import cv2
 import time
@@ -33,7 +31,7 @@ class Teacher(threading.Thread):
 
         self.xml_paths = xml_paths
         self.name = name
-        self.anchors = anchors
+        self.anchors = anchors.copy()
         self.debug = debug
 
         threading.Thread.__init__(self)
@@ -74,11 +72,11 @@ class Teacher(threading.Thread):
                 batch_image_data.append(image.astype(np.float32))
                 batch_gt_bboxes.append(encode_bboxes)
                 batch_gt_classes.append(encode_classes)
-
+            
             batch_image_data = np.asarray(batch_image_data, dtype = np.float32) 
             batch_gt_bboxes = np.asarray(batch_gt_bboxes, dtype = np.float32)
             batch_gt_classes = np.asarray(batch_gt_classes, dtype = np.float32)
-                
+            
             self.batch_data_list.append([batch_image_data, batch_gt_bboxes, batch_gt_classes])
             self.batch_data_length += 1
 

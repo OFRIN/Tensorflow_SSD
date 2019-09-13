@@ -20,7 +20,9 @@ from SSD import *
 from SSD_Loss import *
 from SSD_Utils import *
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+NUM_GPU = 2
+BATCH_SIZE *= NUM_GPU
+os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 
 # 1. dataset
 train_xml_paths = [ROOT_DIR + line.strip() for line in open('./dataset/train.txt', 'r').readlines()]
@@ -35,11 +37,30 @@ log_print('[i] Valid : {}'.format(len(valid_xml_paths)))
 input_var = tf.placeholder(tf.float32, [BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
 is_training = tf.placeholder(tf.bool)
 
-ssd_dic, ssd_sizes = SSD(input_var, is_training)
-anchors = generate_anchors(ssd_sizes, [IMAGE_WIDTH, IMAGE_HEIGHT], ANCHOR_SCALES, ANCHOR_RATIOS)
+input_vars = tf.split(input_var, NUM_GPU)
 
-pred_bboxes_op = Decode_Layer(ssd_dic['pred_bboxes'], anchors)
-pred_classes_op = ssd_dic['pred_classes']
+pred_bboxes_ops = []
+pred_classes_ops = []
+
+for gpu_id in range(NUM_GPU):
+    reuse = gpu_id != 0
+    
+    with tf.device(tf.DeviceSpec(device_type = "GPU", device_index = gpu_id)):
+        with tf.variable_scope(tf.get_variable_scope(), reuse = reuse):
+            print(input_vars[gpu_id], is_training, reuse)
+            ssd_dic, ssd_sizes = SSD(input_vars[gpu_id], is_training, reuse)
+
+            if not reuse:
+                anchors = generate_anchors(ssd_sizes, [IMAGE_WIDTH, IMAGE_HEIGHT], ANCHOR_SCALES, ANCHOR_RATIOS)
+
+            pred_bboxes_op = Decode_Layer(ssd_dic['pred_bboxes'], anchors)
+            pred_classes_op = ssd_dic['pred_classes']
+            
+            pred_bboxes_ops.append(pred_bboxes_op)
+            pred_classes_ops.append(pred_classes_op)
+
+pred_bboxes_op = tf.concat(pred_bboxes_ops, axis = 0)
+pred_classes_op = tf.concat(pred_classes_ops, axis = 0)
 
 gt_bboxes_var = tf.placeholder(tf.float32, [BATCH_SIZE, anchors.shape[0], 4])
 gt_classes_var = tf.placeholder(tf.float32, [BATCH_SIZE, anchors.shape[0], CLASSES])
@@ -63,7 +84,7 @@ summary_op = tf.summary.merge_all()
 
 learning_rate_var = tf.placeholder(tf.float32)
 with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
-    train_op = tf.train.AdamOptimizer(learning_rate_var).minimize(loss_op)
+    train_op = tf.train.AdamOptimizer(learning_rate_var).minimize(loss_op, colocate_gradients_with_ops = True)
 
 # 3. train
 sess = tf.Session()

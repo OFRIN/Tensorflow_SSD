@@ -8,15 +8,16 @@ from Define import *
 from Utils import *
 from DataAugmentation import *
 
-def get_data(xml_path, training, normalize = True):
+def get_data(xml_path, training, normalize = True, augment = True):
     if training:
         image_path, gt_bboxes, gt_classes = xml_read(xml_path, normalize = False)
 
         image = cv2.imread(image_path)
-
-        image, gt_bboxes, gt_classes = DataAugmentation(image, gt_bboxes, gt_classes)
-        image_h, image_w, image_c = image.shape
         
+        if augment:
+            image, gt_bboxes, gt_classes = DataAugmentation(image, gt_bboxes, gt_classes)
+
+        image_h, image_w, image_c = image.shape
         image = cv2.resize(image, (IMAGE_WIDTH, IMAGE_HEIGHT), interpolation = cv2.INTER_CUBIC)
 
         gt_bboxes = gt_bboxes.astype(np.float32)
@@ -42,17 +43,19 @@ def get_data(xml_path, training, normalize = True):
 
     return image, gt_bboxes, gt_classes
 
-def generate_anchors(ssd_sizes, image_wh, anchor_scales, anchor_ratios):
-    ssd_sizes = np.asarray(ssd_sizes, dtype = np.int32)
+def generate_anchors(sizes, image_wh, anchor_scales, anchor_ratios):
+    scales = np.linspace(0.1, 0.9, num = len(sizes))
+    sizes = np.asarray(sizes, dtype = np.int32)
     image_wh = np.asarray(image_wh, dtype = np.float32)
 
     anchors = []
-    for size in ssd_sizes:
+    for scale, size in zip(scales, sizes):
         # scales * ratios
         strides = image_wh / size
-        base_anchor_wh = strides * 2
+        # base_anchor_wh = strides # * 2
+        base_anchor_wh = image_wh * scale
         base_anchor_whs = [base_anchor_wh * scale for scale in anchor_scales]
-
+        
         '''
         [41 41] [15.65853659 15.65853659]
         [21 21] [30.57142857 30.57142857]
@@ -100,7 +103,7 @@ def Encode(gt_bboxes, gt_classes, anchors):
     encode_bboxes = np.zeros_like(anchors)
     encode_classes = np.zeros((anchors.shape[0], CLASSES), dtype = np.float32)
     encode_classes[:, 0] = 1.
-
+    
     if len(gt_bboxes) != 0:
         # calculate ious
         ious = compute_bboxes_IoU(anchors, gt_bboxes)
@@ -120,22 +123,6 @@ def Encode(gt_bboxes, gt_classes, anchors):
     
     return encode_bboxes, encode_classes
 
-def Decode(encode_bboxes, encode_classes, anchors, image_wh):
-    w, h = image_wh
-
-    pred_bboxes = []
-    pred_classes = []
-
-    for bbox, class_prob in zip(encode_bboxes, encode_classes):
-        class_index = np.argmax(class_prob)
-        if class_index != 0:
-            xmin, ymin, xmax, ymax = bbox / np.asarray([IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT]) * np.asarray([w, h, w, h])
-            
-            pred_bboxes.append([xmin, ymin, xmax, ymax])
-            pred_classes.append(class_index)
-
-    return np.asarray(pred_bboxes, dtype = np.float32), np.asarray(pred_classes, dtype = np.int32)
-
 if __name__ == '__main__':
     import cv2
     from SSD import *
@@ -150,7 +137,7 @@ if __name__ == '__main__':
     
     # for index, anchor in enumerate(anchors):
     #     xmin, ymin, xmax, ymax = anchor.astype(np.int32)
-        
+    
     #     cv2.circle(bg, ((xmax + xmin) // 2, (ymax + ymin) // 2), 1, (0, 0, 255), 2)
     #     cv2.rectangle(bg, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
 
@@ -161,7 +148,7 @@ if __name__ == '__main__':
     #         bg = np.zeros((IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL), dtype = np.uint8)
 
     # 2. Demo GT bboxes (Encode -> Decode)
-    xml_paths = glob.glob('D:/DB/VOC2007/train/xml/*.xml')
+    xml_paths = glob.glob('D:/_ImageDataset/VOC2007/train/xml/*.xml')
     
     for xml_path in xml_paths:
         image_path, gt_bboxes, gt_classes = xml_read(xml_path, normalize = True)
@@ -182,14 +169,22 @@ if __name__ == '__main__':
               np.min(positive_mask * encode_bboxes[:, 2:]), np.max(positive_mask * encode_bboxes[:, 2:]))
         print(encode_bboxes.shape, encode_classes.shape, positive_count)
 
-        pred_bboxes, pred_classes = Decode(encode_bboxes, encode_classes, anchors, [w, h])
-        
+        pred_bboxes = []
+        pred_classes = [] 
+
         positive_mask = np.max(encode_classes[:, 1:], axis = 1)
         for i, mask in enumerate(positive_mask):
             if mask == 1:
                 xmin, ymin, xmax, ymax = (anchors[i] / [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT] * [w, h, w, h]).astype(np.int32)
                 cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 0, 255), 1)
-        
+
+                pred_bbox = convert_bboxes(encode_bboxes[i], img_wh = [w, h])
+                pred_class = np.argmax(encode_classes[i])
+                pred_class = CLASS_NAMES[pred_class]
+
+                pred_bboxes.append(pred_bbox)
+                pred_classes.append(pred_class)
+
         for pred_bbox, pred_class in zip(pred_bboxes, pred_classes):
             xmin, ymin, xmax, ymax = pred_bbox.astype(np.int32)
 

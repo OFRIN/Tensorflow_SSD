@@ -1,5 +1,3 @@
-# Copyright (C) 2019 * Ltd. All rights reserved.
-# author : SangHyeon Jo <josanghyeokn@gmail.com>
 
 # dataset parameters
 ROOT_DIR = 'D:/_DeepLearning_DB/'
@@ -8,17 +6,13 @@ CLASS_NAMES = ['background'] + ["aeroplane", "bicycle", "bird", "boat", "bottle"
 CLASS_DIC = {class_name : index for index, class_name in enumerate(CLASS_NAMES)}
 CLASSES = len(CLASS_NAMES)
 
-VALID_SET_RATIO = 0.1
-
 # network parameters
-IMAGE_HEIGHT = 321
-IMAGE_WIDTH = 321
+IMAGE_HEIGHT = 300
+IMAGE_WIDTH = 300
 IMAGE_CHANNEL = 3
 
-SCALE_FACTORS = [0.1, 0.1, 0.2, 0.2]
-
-ANCHOR_SCALES = [1.0, 2.0]
-ANCHOR_RATIOS = [1./2, 1./3, 1.0, 2.0, 3.]
+ANCHOR_SCALES = [0.5, 1.0]
+ANCHOR_RATIOS = [1./3, 1./2, 1.0, 2.0, 3.0]
 
 POSITIVE_IOU_THRESHOLD = 0.5
 
@@ -29,6 +23,6 @@ WEIGHT_DECAY = 0.0001
 BATCH_SIZE = 32
 INIT_LEARNING_RATE = 1e-4
 
-MAX_EPOCH = 100
+MAX_EPOCH = 200
 LOG_ITERATION = 50
 VALID_ITERATION = 5000

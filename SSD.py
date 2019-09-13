@@ -1,6 +1,3 @@
-# Copyright (C) 2019 * Ltd. All rights reserved.
-# author : SangHyeon Jo <josanghyeokn@gmail.com>
-
 import numpy as np
 import tensorflow as tf
 
@@ -24,7 +21,7 @@ def conv_bn_relu(x, filters, kernel_size, strides, padding, is_training, scope, 
             x = tf.nn.relu(x, name = 'relu')
     return x
 
-def SSD_Decode_Layer(offset_bboxes, anchors):
+def Decode_Layer(offset_bboxes, anchors):
     with tf.variable_scope('SSD_Decode'):
         # 1. offset_bboxes
         tx = offset_bboxes[..., 0]
@@ -60,18 +57,17 @@ def SSD_Decode_Layer(offset_bboxes, anchors):
 
     return pred_bboxes
 
-def SSD_ResNet_50(input_var, is_training):
+def SSD_ResNet_50(input_var, is_training, reuse = False):
     ssd_dic = {}
     ssd_sizes = []
 
     x = input_var - [103.939, 123.68, 116.779]
-    
     with tf.contrib.slim.arg_scope(resnet_v2.resnet_arg_scope()):
-        logits, end_points = resnet_v2.resnet_v2_50(x, is_training = is_training)
+        logits, end_points = resnet_v2.resnet_v2_50(x, is_training = is_training, reuse = reuse)
 
     feature_maps = [end_points['resnet_v2_50/block{}'.format(i)] for i in [1, 2, 4]]
     
-    with tf.variable_scope('SSD'):
+    with tf.variable_scope('SSD', reuse = reuse):
         x = feature_maps[2]
 
         x = conv_bn_relu(x, 128, (1, 1), 1, 'valid', is_training, 'conv1_1x1')
@@ -87,17 +83,15 @@ def SSD_ResNet_50(input_var, is_training):
         feature_maps.append(x)
         
         '''
-        Tensor("resnet_v2_50/block1/unit_3/bottleneck_v2/add:0", shape=(?, 41, 41, 256), dtype=float32)
-        Tensor("resnet_v2_50/block2/unit_4/bottleneck_v2/add:0", shape=(?, 21, 21, 512), dtype=float32)
-        Tensor("resnet_v2_50/block4/unit_3/bottleneck_v2/add:0", shape=(?, 11, 11, 2048), dtype=float32)
-        Tensor("SSD/conv1_3x3/relu:0", shape=(?, 6, 6, 128), dtype=float32)
-        Tensor("SSD/conv2_3x3/relu:0", shape=(?, 3, 3, 128), dtype=float32)
-        Tensor("SSD/conv3_3x3/relu:0", shape=(?, 1, 1, 128), dtype=float32)
-        Tensor("SSD/bboxes:0", shape=(?, 13734, 4), dtype=float32)
-        Tensor("SSD/Softmax:0", shape=(?, 13734, 21), dtype=float32)
+        Tensor("resnet_v2_50/block1/unit_3/bottleneck_v2/add:0", shape=(32, 38, 38, 256), dtype=float32)
+        Tensor("resnet_v2_50/block2/unit_4/bottleneck_v2/add:0", shape=(32, 19, 19, 512), dtype=float32)
+        Tensor("resnet_v2_50/block4/unit_3/bottleneck_v2/add:0", shape=(32, 10, 10, 2048), dtype=float32)
+        Tensor("SSD/conv1_3x3/relu:0", shape=(32, 5, 5, 256), dtype=float32)
+        Tensor("SSD/conv2_3x3/relu:0", shape=(32, 3, 3, 256), dtype=float32)
+        Tensor("SSD/conv3_3x3/relu:0", shape=(32, 1, 1, 256), dtype=float32)
         '''
-        # for feature_map in feature_maps:
-        #    print(feature_map)
+        for feature_map in feature_maps:
+            print(feature_map)
 
         pred_bboxes = []
         pred_classes = []
@@ -108,14 +102,10 @@ def SSD_ResNet_50(input_var, is_training):
             _, h, w, c = feature_map.shape.as_list()
             ssd_sizes.append([w, h])
             
-            _pred_bboxes = conv_bn_relu(feature_map, 256, (3, 3), 1, 'same', is_training, 'bboxes_{}x{}_1'.format(w, h), bn = True, activation = True)
-            _pred_bboxes = conv_bn_relu(_pred_bboxes, 256, (3, 3), 1, 'same', is_training, 'bboxes_{}x{}_2'.format(w, h), bn = True, activation = True)
-            _pred_bboxes = conv_bn_relu(_pred_bboxes, 4 * anchors_per_location, (3, 3), 1, 'same', is_training, 'bboxes_{}x{}'.format(w, h), bn = False, activation = False)
+            _pred_bboxes = conv_bn_relu(feature_map, 4 * anchors_per_location, (3, 3), 1, 'same', is_training, 'bboxes_{}x{}'.format(w, h), bn = True, activation = False)
             _pred_bboxes = tf.reshape(_pred_bboxes, [-1, h * w * anchors_per_location, 4])
             
-            _pred_classes = conv_bn_relu(feature_map, 256, (3, 3), 1, 'same', is_training, 'classes_{}x{}_1'.format(w, h), bn = True, activation = True)
-            _pred_classes = conv_bn_relu(_pred_classes, 256, (3, 3), 1, 'same', is_training, 'classes_{}x{}_2'.format(w, h), bn = True, activation = True)
-            _pred_classes = conv_bn_relu(_pred_classes, CLASSES * anchors_per_location, (3, 3), 1, 'same', is_training, 'classes_{}x{}'.format(w, h), bn = False, activation = False)
+            _pred_classes = conv_bn_relu(feature_map, CLASSES * anchors_per_location, (3, 3), 1, 'same', is_training, 'classes_{}x{}'.format(w, h), bn = True, activation = False)
             _pred_classes = tf.reshape(_pred_classes, [-1, h * w* anchors_per_location, CLASSES])
 
             pred_bboxes.append(_pred_bboxes)
@@ -132,8 +122,33 @@ def SSD_ResNet_50(input_var, is_training):
 SSD = SSD_ResNet_50
 
 if __name__ == '__main__':
+    # IMAGE_HEIGHT = 300
+    # IMAGE_WIDTH = 300
+    
     input_var = tf.placeholder(tf.float32, [None, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
 
+    '''
+    300x300
+    Tensor("resnet_v2_50/block1/unit_3/bottleneck_v2/add:0", shape=(?, 38, 38, 256), dtype=float32)
+    Tensor("resnet_v2_50/block2/unit_4/bottleneck_v2/add:0", shape=(?, 19, 19, 512), dtype=float32)
+    Tensor("resnet_v2_50/block4/unit_3/bottleneck_v2/add:0", shape=(?, 10, 10, 2048), dtype=float32)
+    Tensor("SSD/conv1_3x3/relu:0", shape=(?, 5, 5, 256), dtype=float32)
+    Tensor("SSD/conv2_3x3/relu:0", shape=(?, 3, 3, 256), dtype=float32)
+    Tensor("SSD/conv3_3x3/relu:0", shape=(?, 1, 1, 256), dtype=float32)
+    Tensor("SSD/bboxes:0", shape=(?, 19400, 4), dtype=float32)
+    Tensor("SSD/Softmax:0", shape=(?, 19400, 21), dtype=float32)
+    '''
+    '''
+    321x321
+    Tensor("resnet_v2_50/block1/unit_3/bottleneck_v2/add:0", shape=(?, 41, 41, 256), dtype=float32)
+    Tensor("resnet_v2_50/block2/unit_4/bottleneck_v2/add:0", shape=(?, 21, 21, 512), dtype=float32)
+    Tensor("resnet_v2_50/block4/unit_3/bottleneck_v2/add:0", shape=(?, 11, 11, 2048), dtype=float32)
+    Tensor("SSD/conv1_3x3/relu:0", shape=(?, 6, 6, 256), dtype=float32)
+    Tensor("SSD/conv2_3x3/relu:0", shape=(?, 3, 3, 256), dtype=float32)
+    Tensor("SSD/conv3_3x3/relu:0", shape=(?, 1, 1, 256), dtype=float32)
+    Tensor("SSD/bboxes:0", shape=(?, 22890, 4), dtype=float32)
+    Tensor("SSD/Softmax:0", shape=(?, 22890, 21), dtype=float32)
+    '''
     ssd_dic, ssd_sizes = SSD(input_var, False)
     
     print(ssd_dic['pred_bboxes'])

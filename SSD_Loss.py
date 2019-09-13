@@ -1,5 +1,3 @@
-# Copyright (C) 2019 * Ltd. All rights reserved.
-# author : SangHyeon Jo <josanghyeokn@gmail.com>
 
 import tensorflow as tf
 

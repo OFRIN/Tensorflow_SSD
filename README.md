@@ -4,7 +4,8 @@
 1. VGG16 -> ResNetv2-50
 2. Smooth L1 Loss -> GIoU
 3. Online Hard Nagative Mining -> Focal Loss
-4. Input Resolution 300x300 -> 321x321
+4. weight decay 5e-4 -> 1e-4
+5. Momentum Optimizer -> Adam Optimizer
 
 ## # Results (Pascal VOC 2007 Test)
 | Model  | mAP |

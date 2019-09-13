@@ -6,8 +6,8 @@ import random
 
 import numpy as np
 
-# prob = 10%
-def random_flip(image, gt_bboxes, condition = [True] + [False] * 9):
+# prob = 50%
+def random_flip(image, gt_bboxes, condition = [True] + [False] * 1):
     if random.choice(condition):
         h, w, c = image.shape
 
@@ -48,8 +48,8 @@ def random_brightness(image, condition = [True] + [False] * 19):
 
     return image
 
-# prob = 5%
-def random_hue(image, condition = [True] + [False] * 19):
+# prob = 20%
+def random_hue(image, condition = [True] + [False] * 4):
     if random.choice(condition):
         hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         h, s, v = cv2.split(hsv_image)
@@ -64,8 +64,8 @@ def random_hue(image, condition = [True] + [False] * 19):
 
     return image
 
-# prob = 5%
-def random_saturation(image, condition = [True] + [False] * 19):
+# prob = 20%
+def random_saturation(image, condition = [True] + [False] * 4):
     if random.choice(condition):
         hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         h, s, v = cv2.split(hsv_image)
@@ -87,8 +87,8 @@ def random_gray(image, condition = [True] + [False] * 19):
         image = cv2.merge([image, image, image])
     return image
 
-# prob = 10%
-def random_crop(image, gt_bboxes, gt_classes, condition = [True] + [False] * 9):
+# prob = 25%
+def random_crop(image, gt_bboxes, gt_classes, condition = [True] + [False] * 3):
     if random.choice(condition):
         h, w, _ = image.shape
         max_bbox = np.concatenate([np.min(gt_bboxes[:, 0:2], axis=0), np.max(gt_bboxes[:, 2:4], axis=0)], axis=-1)
@@ -102,7 +102,7 @@ def random_crop(image, gt_bboxes, gt_classes, condition = [True] + [False] * 9):
         crop_ymin = max(0, int(max_bbox[1] - random.uniform(0, max_u_trans)))
         crop_xmax = max(w, int(max_bbox[2] + random.uniform(0, max_r_trans)))
         crop_ymax = max(h, int(max_bbox[3] + random.uniform(0, max_d_trans)))
-
+        
         image = image[crop_ymin : crop_ymax, crop_xmin : crop_xmax]
 
         gt_bboxes[:, [0, 2]] = gt_bboxes[:, [0, 2]] - crop_xmin
@@ -110,8 +110,8 @@ def random_crop(image, gt_bboxes, gt_classes, condition = [True] + [False] * 9):
 
     return image, gt_bboxes, gt_classes
 
-# prob = 10%
-def random_shift(image, gt_bboxes, gt_classes, condition = [True] + [False] * 9):
+# prob = 25%
+def random_shift(image, gt_bboxes, gt_classes, condition = [True] + [False] * 3):
     if random.choice(condition):
         h, w, _ = image.shape
         max_bbox = np.concatenate([np.min(gt_bboxes[:, 0:2], axis=0), np.max(gt_bboxes[:, 2:4], axis=0)], axis=-1)
@@ -136,14 +136,14 @@ def DataAugmentation(image, bboxes, classes):
     image, bboxes = random_flip(image, bboxes)
     image, bboxes = random_scale(image, bboxes)
 
-    image = random_blur(image)
-    image = random_brightness(image)
-    # image = random_hue(image)
-    # image = random_saturation(image)
-    image = random_gray(image)
+    # image = random_blur(image)
+    # image = random_brightness(image)
+    image = random_hue(image)
+    image = random_saturation(image)
+    # image = random_gray(image)
     
-    image, bboxes, classes = random_shift(image, bboxes, classes)
     image, bboxes, classes = random_crop(image, bboxes, classes)
+    image, bboxes, classes = random_shift(image, bboxes, classes)
     
     return image, bboxes, classes
 
@@ -152,8 +152,7 @@ if __name__ == '__main__':
     from Utils import *
     
     xml_paths = []
-    xml_paths += glob.glob("D:/DB/VOC2007/train/xml/" + "*")
-    xml_paths += glob.glob("D:/DB/VOC2012/xml/" + "*")
+    xml_paths += glob.glob("D:/_DeepLearning_DB/VOC2007/train/xml/" + "*")
 
     for xml_path in xml_paths:
         image_path, gt_bboxes, gt_classes = xml_read(xml_path, normalize = False)
@@ -173,6 +172,8 @@ if __name__ == '__main__':
         # image = random_gray(image, [True])
         image, gt_bboxes, gt_classes = random_crop(image, gt_bboxes, gt_classes, [True])
         # image, gt_bboxes, gt_classes = random_translate(image, gt_bboxes, gt_classes, [True])
+
+        # image, gt_bboxes, gt_classes = DataAugmentation(image, gt_bboxes, gt_classes)
 
         h, w, c = image.shape
 

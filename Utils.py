@@ -41,6 +41,9 @@ def xml_read(xml_path, find_labels = CLASS_NAMES, normalize = False):
         bbox_ymin = max(min(int(bbox.find('ymin').text.split('.')[0]), image_height - 1), 0)
         bbox_xmax = max(min(int(bbox.find('xmax').text.split('.')[0]), image_width - 1), 0)
         bbox_ymax = max(min(int(bbox.find('ymax').text.split('.')[0]), image_height - 1), 0)
+
+        if (bbox_xmax - bbox_xmin) == 0 or (bbox_ymax - bbox_ymin) == 0:
+            continue
         
         if normalize:
             bbox = np.asarray([bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax], dtype = np.float32)
@@ -48,13 +51,51 @@ def xml_read(xml_path, find_labels = CLASS_NAMES, normalize = False):
             bbox *= [IMAGE_WIDTH, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_HEIGHT]
             bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax = bbox
 
-        if (bbox_xmax - bbox_xmin) == 0 or (bbox_ymax - bbox_ymin) == 0:
-            continue
-        
         bboxes.append([bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax])
         classes.append(CLASS_DIC[label])
 
     return image_path, np.asarray(bboxes, dtype = np.float32), np.asarray(classes, dtype = np.int32)
+
+def class_xml_read(xml_path, find_labels):
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    
+    image_path = xml_path[:-3] + '*'
+    image_path = image_path.replace('/xml', '/image')
+    image_path = glob.glob(image_path)[0]
+
+    size = root.find('size')
+    image_width = int(size.find('width').text)
+    image_height = int(size.find('height').text)
+    
+    bboxes = {}
+    
+    for obj in root.findall('object'):
+        label = obj.find('name').text
+        if not label in find_labels:
+            continue
+            
+        bbox = obj.find('bndbox')
+        
+        bbox_xmin = max(min(int(bbox.find('xmin').text.split('.')[0]), image_width - 1), 0)
+        bbox_ymin = max(min(int(bbox.find('ymin').text.split('.')[0]), image_height - 1), 0)
+        bbox_xmax = max(min(int(bbox.find('xmax').text.split('.')[0]), image_width - 1), 0)
+        bbox_ymax = max(min(int(bbox.find('ymax').text.split('.')[0]), image_height - 1), 0)
+
+        if (bbox_xmax - bbox_xmin) == 0 or (bbox_ymax - bbox_ymin) == 0:
+            continue
+
+        try:
+            bboxes[label]
+        except KeyError:
+            bboxes[label] = []
+
+        bboxes[label].append([bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax])
+
+    return image_path, bboxes
+
+def convert_bboxes(bboxes, img_wh, ori_wh = [IMAGE_WIDTH, IMAGE_HEIGHT]):
+    return bboxes / (ori_wh * 2) * (img_wh * 2)
 
 def compute_bboxes_IoU(bboxes_1, bboxes_2):
     area_1 = (bboxes_1[:, 2] - bboxes_1[:, 0] + 1) * (bboxes_1[:, 3] - bboxes_1[:, 1] + 1)
@@ -71,30 +112,13 @@ def compute_bboxes_IoU(bboxes_1, bboxes_2):
 
     return intersection / np.maximum(union, 1e-10)
 
-def IoU(box1, box2):
-    box1_area = (box1[2] - box1[0] + 1) * (box1[3] - box1[1] + 1)
-    box2_area = (box2[2] - box2[0] + 1) * (box2[3] - box2[1] + 1)
-    
-    area_xmin = np.maximum(box1[0], box2[0])
-    area_ymin = np.maximum(box1[1], box2[1])
-    area_xmax = np.minimum(box1[2], box2[2])
-    area_ymax = np.minimum(box1[3], box2[3])
-
-    area_w = np.maximum(0, area_xmax - area_xmin + 1)
-    area_h = np.maximum(0, area_ymax - area_ymin + 1)
-
-    intersection = area_w * area_h
-    union = np.maximum(box1_area + box2_area - intersection, 1)
-
-    return intersection / union
-
-def py_nms(dets, thresh, mode = "Union"):
+def nms(dets, thresh):
     x1 = dets[:, 0]
     y1 = dets[:, 1]
     x2 = dets[:, 2]
     y2 = dets[:, 3]
-    scores = np.arange(len(dets))
-
+    scores = dets[:, 4]
+    
     areas = (x2 - x1 + 1) * (y2 - y1 + 1)
     order = scores.argsort()[::-1]
 
@@ -111,64 +135,31 @@ def py_nms(dets, thresh, mode = "Union"):
         w = np.maximum(0.0, xx2 - xx1 + 1)
         h = np.maximum(0.0, yy2 - yy1 + 1)
         inter = w * h
-        if mode == "Union":
-            ovr = inter / (areas[i] + areas[order[1:]] - inter)
-        elif mode == "Minimum":
-            ovr = inter / np.minimum(areas[i], areas[order[1:]])
+        ovr = inter / (areas[i] + areas[order[1:]] - inter)
 
-        #keep
         inds = np.where(ovr <= thresh)[0]
         order = order[inds + 1]
 
-    return keep
+    return dets[keep]
 
-def class_nms(bboxes, classes, threshold = 0.5, mode = 'Union'):
+def class_nms(pred_bboxes, pred_classes, threshold = 0.5):
     data_dic = {}
     nms_bboxes = []
     nms_classes = []
 
-    for bbox, class_index in zip(bboxes, classes):
+    for bbox, class_index in zip(pred_bboxes, pred_classes):
         try:
             data_dic[class_index].append(bbox)
         except KeyError:
             data_dic[class_index] = []
             data_dic[class_index].append(bbox)
-
+    
     for key in data_dic.keys():
-        data_dic[key] = np.asarray(data_dic[key], dtype = np.float32)
-        keep_indexs = py_nms(data_dic[key], threshold)
+        pred_bboxes = np.asarray(data_dic[key], dtype = np.float32)
+        pred_bboxes = nms(pred_bboxes, threshold)
 
-        for bbox in data_dic[key][keep_indexs]:
-            nms_bboxes.append(bbox)
+        for pred_bbox in pred_bboxes:
+            nms_bboxes.append(pred_bbox)
             nms_classes.append(key)
     
-    return nms_bboxes, nms_classes
-
-def Precision_Recall(gt_boxes, gt_classes, pred_boxes, pred_classes, threshold_iou = 0.5):
-    recall = 0.0
-    precision = 0.0
-
-    if len(gt_boxes) == 0:
-        if len(pred_boxes) == 0:
-            return 1.0, 1.0
-        else:
-            return 0.0, 0.0
-
-    if len(pred_boxes) != 0:
-        gt_boxes_cnt = len(gt_boxes)
-        pred_boxes_cnt = len(pred_boxes)
-
-        recall_vector = np.zeros(gt_boxes_cnt)
-        precision_vector = np.zeros(pred_boxes_cnt)
-
-        for gt_index in range(gt_boxes_cnt):
-            for pred_index in range(pred_boxes_cnt):
-                if IoU(pred_boxes[pred_index], gt_boxes[gt_index]) >= threshold_iou:
-                    recall_vector[gt_index] = True
-                    if gt_classes[gt_index] == pred_classes[pred_index]:
-                        precision_vector[pred_index] = True
-
-        recall = np.sum(recall_vector) / gt_boxes_cnt
-        precision = np.sum(precision_vector) / pred_boxes_cnt
-
-    return precision, recall
+    return np.asarray(nms_bboxes, dtype = np.float32), np.asarray(nms_classes, dtype = np.int32)
