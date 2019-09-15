@@ -20,7 +20,7 @@ from SSD import *
 from SSD_Loss import *
 from SSD_Utils import *
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 # 1. dataset
 train_xml_paths = [ROOT_DIR + line.strip() for line in open('./dataset/train.txt', 'r').readlines()]
@@ -32,7 +32,7 @@ log_print('[i] Train : {}'.format(len(train_xml_paths)))
 log_print('[i] Valid : {}'.format(len(valid_xml_paths)))
 
 # 2. build
-input_var = tf.placeholder(tf.float32, [BATCH_SIZE, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
+input_var = tf.placeholder(tf.float32, [None, IMAGE_HEIGHT, IMAGE_WIDTH, IMAGE_CHANNEL])
 is_training = tf.placeholder(tf.bool)
 
 ssd_dic, ssd_sizes = SSD(input_var, is_training)
@@ -41,8 +41,8 @@ anchors = generate_anchors(ssd_sizes, [IMAGE_WIDTH, IMAGE_HEIGHT], ANCHOR_SCALES
 pred_bboxes_op = Decode_Layer(ssd_dic['pred_bboxes'], anchors)
 pred_classes_op = ssd_dic['pred_classes']
 
-gt_bboxes_var = tf.placeholder(tf.float32, [BATCH_SIZE, anchors.shape[0], 4])
-gt_classes_var = tf.placeholder(tf.float32, [BATCH_SIZE, anchors.shape[0], CLASSES])
+gt_bboxes_var = tf.placeholder(tf.float32, [None, anchors.shape[0], 4])
+gt_classes_var = tf.placeholder(tf.float32, [None, anchors.shape[0], CLASSES])
 
 log_print('[i] pred_bboxes_op : {}'.format(pred_bboxes_op))
 log_print('[i] pred_classes_op : {}'.format(pred_classes_op))
@@ -214,7 +214,7 @@ for iter in range(1, max_iteration + 1):
 
             # calculate correct/confidence
             if len(batch_image_data) == BATCH_SIZE:
-                encode_bboxes, encode_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data})
+                encode_bboxes, encode_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data, is_training : False})
 
                 for i in range(BATCH_SIZE):
                     gt_bboxes_dic = batch_gt_bboxes_dic[i]
@@ -248,7 +248,7 @@ for iter in range(1, max_iteration + 1):
             sys.stdout.flush()
 
         if len(batch_image_data) != 0:
-            encode_bboxes, encode_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data})
+            encode_bboxes, encode_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data, is_training : False})
 
             for i in range(len(batch_image_data)):
                 gt_bboxes_dic = batch_gt_bboxes_dic[i]
@@ -261,7 +261,7 @@ for iter in range(1, max_iteration + 1):
                     pred_bboxes = encode_bboxes[i, :, :]
                     pred_classes = encode_classes[i, :, gt_class][..., np.newaxis]
                     pred_bboxes = np.concatenate((pred_bboxes, pred_classes), axis = -1)
-
+                    
                     pred_bboxes[:, :4] = convert_bboxes(pred_bboxes[:, :4], img_wh = batch_image_wh[i])
                     pred_bboxes = nms(pred_bboxes, nms_threshold)
 

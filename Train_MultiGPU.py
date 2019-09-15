@@ -20,9 +20,7 @@ from SSD import *
 from SSD_Loss import *
 from SSD_Utils import *
 
-NUM_GPU = 2
-BATCH_SIZE *= NUM_GPU
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
 
 # 1. dataset
 train_xml_paths = [ROOT_DIR + line.strip() for line in open('./dataset/train.txt', 'r').readlines()]
@@ -101,7 +99,7 @@ pretrained_saver.restore(sess, './resnet_v2_model/resnet_v2_50.ckpt')
 # '''
 
 saver = tf.train.Saver()
-# saver.restore(sess, './model/SSD_ResNet_v2_{}.ckpt'.format(30000))
+# saver.restore(sess, './model/SSD_{}.ckpt'.format(10000))
 
 best_valid_mAP = 0.0
 learning_rate = INIT_LEARNING_RATE
@@ -130,7 +128,7 @@ train_writer = tf.summary.FileWriter('./logs/train')
 #     train_threads.append(train_thread)
 # input()
 
-for iter in range(1, max_iteration + 1):
+for iter in range(1 + 10000, max_iteration + 1):
     if iter in decay_iteration:
         learning_rate /= 10
         log_print('[i] learning rate decay : {} -> {}'.format(learning_rate * 10, learning_rate))
@@ -170,7 +168,7 @@ for iter in range(1, max_iteration + 1):
         batch_image_data.append(image.astype(np.float32))
         batch_gt_bboxes.append(encode_bboxes)
         batch_gt_classes.append(encode_classes)
-
+    
     batch_image_data = np.asarray(batch_image_data, dtype = np.float32) 
     batch_gt_bboxes = np.asarray(batch_gt_bboxes, dtype = np.float32)
     batch_gt_classes = np.asarray(batch_gt_classes, dtype = np.float32)
@@ -235,7 +233,7 @@ for iter in range(1, max_iteration + 1):
 
             # calculate correct/confidence
             if len(batch_image_data) == BATCH_SIZE:
-                encode_bboxes, encode_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data})
+                encode_bboxes, encode_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data, is_training : False})
 
                 for i in range(BATCH_SIZE):
                     gt_bboxes_dic = batch_gt_bboxes_dic[i]
@@ -267,34 +265,7 @@ for iter in range(1, max_iteration + 1):
 
             sys.stdout.write('\r# Validation = {:.2f}%'.format(valid_iter / valid_xml_count * 100))
             sys.stdout.flush()
-
-        if len(batch_image_data) != 0:
-            encode_bboxes, encode_classes = sess.run([pred_bboxes_op, pred_classes_op], feed_dict = {input_var : batch_image_data})
-
-            for i in range(len(batch_image_data)):
-                gt_bboxes_dic = batch_gt_bboxes_dic[i]
-                for class_name in list(gt_bboxes_dic.keys()):
-                    gt_bboxes = np.asarray(gt_bboxes_dic[class_name], dtype = np.float32)
-
-                    gt_class = CLASS_DIC[class_name]
-                    all_ground_truths_dic[class_name] += gt_bboxes.shape[0]
-
-                    pred_bboxes = encode_bboxes[i, :, :]
-                    pred_classes = encode_classes[i, :, gt_class][..., np.newaxis]
-                    pred_bboxes = np.concatenate((pred_bboxes, pred_classes), axis = -1)
-
-                    pred_bboxes[:, :4] = convert_bboxes(pred_bboxes[:, :4], img_wh = batch_image_wh[i])
-                    pred_bboxes = nms(pred_bboxes, nms_threshold)
-
-                    ious = compute_bboxes_IoU(pred_bboxes, gt_bboxes)
-
-                    # ious >= 0.50 (AP@50)
-                    correct = np.max(ious, axis = 1) >= ap_threshold
-                    confidence = pred_bboxes[:, 4]
-
-                    correct_dic[class_name] += correct.tolist()
-                    confidence_dic[class_name] += confidence.tolist()
-
+            
         valid_time = int(time.time() - valid_time)
         print('\n[i] valid time = {}sec'.format(valid_time))
 

@@ -102,10 +102,10 @@ def SSD_ResNet_50(input_var, is_training, reuse = False):
             _, h, w, c = feature_map.shape.as_list()
             ssd_sizes.append([w, h])
             
-            _pred_bboxes = conv_bn_relu(feature_map, 4 * anchors_per_location, (3, 3), 1, 'same', is_training, 'bboxes_{}x{}'.format(w, h), bn = True, activation = False)
+            _pred_bboxes = conv_bn_relu(feature_map, 4 * anchors_per_location, (3, 3), 1, 'same', is_training, 'bboxes_{}x{}'.format(w, h), bn = False, activation = False)
             _pred_bboxes = tf.reshape(_pred_bboxes, [-1, h * w * anchors_per_location, 4])
-            
-            _pred_classes = conv_bn_relu(feature_map, CLASSES * anchors_per_location, (3, 3), 1, 'same', is_training, 'classes_{}x{}'.format(w, h), bn = True, activation = False)
+
+            _pred_classes = conv_bn_relu(feature_map, CLASSES * anchors_per_location, (3, 3), 1, 'same', is_training, 'classes_{}x{}'.format(w, h), bn = False, activation = False)
             _pred_classes = tf.reshape(_pred_classes, [-1, h * w* anchors_per_location, CLASSES])
 
             pred_bboxes.append(_pred_bboxes)
@@ -137,17 +137,6 @@ if __name__ == '__main__':
     Tensor("SSD/conv3_3x3/relu:0", shape=(?, 1, 1, 256), dtype=float32)
     Tensor("SSD/bboxes:0", shape=(?, 19400, 4), dtype=float32)
     Tensor("SSD/Softmax:0", shape=(?, 19400, 21), dtype=float32)
-    '''
-    '''
-    321x321
-    Tensor("resnet_v2_50/block1/unit_3/bottleneck_v2/add:0", shape=(?, 41, 41, 256), dtype=float32)
-    Tensor("resnet_v2_50/block2/unit_4/bottleneck_v2/add:0", shape=(?, 21, 21, 512), dtype=float32)
-    Tensor("resnet_v2_50/block4/unit_3/bottleneck_v2/add:0", shape=(?, 11, 11, 2048), dtype=float32)
-    Tensor("SSD/conv1_3x3/relu:0", shape=(?, 6, 6, 256), dtype=float32)
-    Tensor("SSD/conv2_3x3/relu:0", shape=(?, 3, 3, 256), dtype=float32)
-    Tensor("SSD/conv3_3x3/relu:0", shape=(?, 1, 1, 256), dtype=float32)
-    Tensor("SSD/bboxes:0", shape=(?, 22890, 4), dtype=float32)
-    Tensor("SSD/Softmax:0", shape=(?, 22890, 21), dtype=float32)
     '''
     ssd_dic, ssd_sizes = SSD(input_var, False)
     

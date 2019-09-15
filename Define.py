@@ -1,6 +1,6 @@
 
 # dataset parameters
-ROOT_DIR = 'D:/_DeepLearning_DB/'
+ROOT_DIR = 'D:/_ImageDataset/'
 
 CLASS_NAMES = ['background'] + ["aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train", "tvmonitor"]
 CLASS_DIC = {class_name : index for index, class_name in enumerate(CLASS_NAMES)}
@@ -20,9 +20,10 @@ POSITIVE_IOU_THRESHOLD = 0.5
 WEIGHT_DECAY = 0.0001
 
 # train
-BATCH_SIZE = 32
+NUM_GPU = 2
+BATCH_SIZE = 16 * NUM_GPU
 INIT_LEARNING_RATE = 1e-4
 
 MAX_EPOCH = 200
 LOG_ITERATION = 50
-VALID_ITERATION = 5000
+VALID_ITERATION = 10000
