@@ -30,7 +30,7 @@ def GIoU(bboxes_1, bboxes_2):
     area_1 = (bboxes_1[..., 2] - bboxes_1[..., 0]) * (bboxes_1[..., 3] - bboxes_1[..., 1])
     area_2 = (bboxes_2[..., 2] - bboxes_2[..., 0]) * (bboxes_2[..., 3] - bboxes_2[..., 1])
     
-    intersection_wh = tf.minimum(bboxes_1[:, :, 2:], bboxes_2[:, :, 2:]) - tf.maximum(bboxes_1[:, :, :2], bboxes_2[:, :, :2])
+    intersection_wh = tf.minimum(bboxes_1[..., 2:], bboxes_2[..., 2:]) - tf.maximum(bboxes_1[..., :2], bboxes_2[..., :2])
     intersection_wh = tf.maximum(intersection_wh, 0)
     
     intersection = intersection_wh[..., 0] * intersection_wh[..., 1]

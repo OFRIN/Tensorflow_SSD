@@ -19,7 +19,8 @@ from SSD_Utils import *
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # 1. dataset
-test_xml_paths = glob.glob(ROOT_DIR + 'VOC2012/test/xml/*.xml')
+# test_xml_paths = glob.glob(ROOT_DIR + 'VOC2007/test/xml/*.xml')
+test_xml_paths = [ROOT_DIR + line.strip() for line in open('./dataset/valid.txt', 'r').readlines()]
 print('[i] Test : {}'.format(len(test_xml_paths)))
 
 # 2. build
@@ -32,14 +33,14 @@ anchors = generate_anchors(ssd_sizes, [IMAGE_WIDTH, IMAGE_HEIGHT], ANCHOR_SCALES
 gt_bboxes_var = tf.placeholder(tf.float32, [None, anchors.shape[0], 4])
 gt_classes_var = tf.placeholder(tf.float32, [None, anchors.shape[0], CLASSES])
 
-pred_bboxes_op = SSD_Decode_Layer(ssd_dic['pred_bboxes'], anchors)
+pred_bboxes_op = Decode_Layer(ssd_dic['pred_bboxes'], anchors)
 pred_classes_op = ssd_dic['pred_classes']
 
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
 
 saver = tf.train.Saver()
-saver.restore(sess, './model/SSD_ResNet_v2_{}.ckpt'.format(80000))
+saver.restore(sess, './model/SSD_{}.ckpt'.format(30000))
 
 BATCH_SIZE = 1
 test_iteration = len(test_xml_paths) // BATCH_SIZE
@@ -75,7 +76,7 @@ for test_iter in range(test_iteration):
         pred_bboxes = np.concatenate((pred_bboxes, np.max(encode_classes[pred_indexs], axis = -1, keepdims = True)), axis = -1)
         pred_classes = pred_classes[pred_indexs]
         
-        pred_bboxes, pred_classes = class_nms(pred_bboxes, pred_classes, threshold = 0.5)
+        pred_bboxes, pred_classes = class_nms(pred_bboxes, pred_classes, threshold = 0.6)
 
         for gt_bbox, gt_class in zip(gt_bboxes, gt_classes):
             xmin, ymin, xmax, ymax = gt_bbox.astype(np.int32)

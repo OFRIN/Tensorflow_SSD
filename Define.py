@@ -1,6 +1,6 @@
 
 # dataset parameters
-ROOT_DIR = 'D:/_ImageDataset/'
+ROOT_DIR = 'D:/_DeepLearning_DB/'
 
 CLASS_NAMES = ['background'] + ["aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train", "tvmonitor"]
 CLASS_DIC = {class_name : index for index, class_name in enumerate(CLASS_NAMES)}
